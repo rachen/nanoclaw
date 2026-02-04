@@ -162,6 +162,135 @@ launchctl kickstart -k gui/$(id -u)/com.nanoclaw
 
 ---
 
+## File Structure
+
+```
+.claude/skills/add-discord/
+├── SKILL.md          # This documentation
+├── host.ts           # Host-side IPC handler (uses discord.js)
+└── agent.ts          # Container-side MCP tool definitions
+```
+
+## Quick Start (Action-Only Mode)
+
+For the simplest integration (agent can send to Discord, but Discord doesn't trigger):
+
+```bash
+# 1. Install dependency
+npm install discord.js
+
+# 2. Rebuild container to include skill
+./container/build.sh
+
+# 3. Rebuild host and restart service
+npm run build
+launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+```
+
+## Integration Points (Action-Only Mode)
+
+To integrate this skill into NanoClaw for Action-Only mode:
+
+---
+
+**1. Host side: `src/index.ts`**
+
+Add import after other local imports:
+
+```typescript
+import {
+  handleDiscordIpc,
+  initDiscordClient,
+} from '../.claude/skills/add-discord/host.js';
+```
+
+Initialize Discord client in `main()` after `loadState()`:
+
+```typescript
+await initDiscordClient();
+```
+
+Modify `processTaskIpc` function's switch statement default case:
+
+```typescript
+// Find:
+default:
+  logger.warn({ type: data.type }, 'Unknown IPC task type');
+
+// Replace with:
+default:
+  const handled = await handleDiscordIpc(data, sourceGroup, isMain, DATA_DIR);
+  if (!handled) {
+    logger.warn({ type: data.type }, 'Unknown IPC task type');
+  }
+```
+
+---
+
+**2. Container side: `container/agent-runner/src/ipc-mcp.ts`**
+
+Add import after existing imports:
+
+```typescript
+// @ts-ignore - Copied during build from .claude/skills/add-discord/
+import { createDiscordTools } from './skills/add-discord/agent.js';
+```
+
+Add to the tools array in `createIpcMcp()`:
+
+```typescript
+return createSdkMcpServer({
+  name: 'nanoclaw',
+  version: '1.0.0',
+  tools: [
+    // ... existing tools ...
+    ...createDiscordTools({ groupFolder, isMain, isScheduledTask }),
+  ],
+});
+```
+
+---
+
+**3. Build script: `container/build.sh`**
+
+Change build context from `container/` to project root:
+
+```bash
+# Find:
+container build -t "${IMAGE_NAME}:${TAG}" .
+
+# Replace with:
+cd "$SCRIPT_DIR/.."
+container build -t "${IMAGE_NAME}:${TAG}" -f container/Dockerfile .
+```
+
+---
+
+**4. Dockerfile: `container/Dockerfile`**
+
+Update build context paths:
+
+```dockerfile
+# Find:
+COPY agent-runner/package*.json ./
+...
+COPY agent-runner/ ./
+
+# Replace with:
+COPY container/agent-runner/package*.json ./
+...
+COPY container/agent-runner/ ./
+```
+
+Add COPY line after `COPY container/agent-runner/ ./`:
+
+```dockerfile
+# Copy skill MCP tools
+COPY .claude/skills/add-discord/agent.ts ./src/skills/add-discord/
+```
+
+---
+
 ## Architecture Notes (Read This First!)
 
 ### Environment Variables: Single Source of Truth
