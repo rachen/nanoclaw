@@ -12,6 +12,8 @@ import makeWASocket, {
 import {
   ASSISTANT_NAME,
   DATA_DIR,
+  EMAIL_CHANNEL,
+  GROUPS_DIR,
   IPC_POLL_INTERVAL,
   MAIN_GROUP_FOLDER,
   POLL_INTERVAL,
@@ -19,6 +21,7 @@ import {
   TIMEZONE,
   TRIGGER_PATTERN,
 } from './config.js';
+import { checkForNewEmails, getContextKey, sendEmailReply } from './email-channel.js';
 import {
   AvailableGroup,
   runContainerAgent,
@@ -33,6 +36,9 @@ import {
   getNewMessages,
   getTaskById,
   initDatabase,
+  isEmailProcessed,
+  markEmailProcessed,
+  markEmailResponded,
   setLastGroupSync,
   storeChatMetadata,
   storeMessage,
@@ -220,7 +226,7 @@ async function processMessage(msg: NewMessage): Promise<void> {
 
   if (response) {
     lastAgentTimestamp[msg.chat_jid] = msg.timestamp;
-    await sendMessage(msg.chat_jid, `${ASSISTANT_NAME}: ${response}`);
+    await sendMessage(msg.chat_jid, response);
   }
 }
 
@@ -341,10 +347,7 @@ function startIpcWatcher(): void {
                   isMain ||
                   (targetGroup && targetGroup.folder === sourceGroup)
                 ) {
-                  await sendMessage(
-                    data.chatJid,
-                    `${ASSISTANT_NAME}: ${data.text}`,
-                  );
+                  await sendMessage(data.chatJid, data.text);
                   logger.info(
                     { chatJid: data.chatJid, sourceGroup },
                     'IPC message sent',
@@ -355,6 +358,14 @@ function startIpcWatcher(): void {
                     'Unauthorized IPC message attempt blocked',
                   );
                 }
+              } else if (data.type === 'typing_indicator' && data.chatJid) {
+                const duration = data.duration || 5000;
+                await setTyping(data.chatJid, true);
+                setTimeout(() => setTyping(data.chatJid, false), duration);
+                logger.info(
+                  { chatJid: data.chatJid, duration, sourceGroup },
+                  'IPC typing indicator',
+                );
               }
               fs.unlinkSync(filePath);
             } catch (err) {
@@ -692,7 +703,7 @@ async function connectWhatsApp(): Promise<void> {
       }
     } else if (connection === 'open') {
       logger.info('Connected to WhatsApp');
-      
+
       // Build LID to phone mapping from auth state for self-chat translation
       if (sock.user) {
         const phoneUser = sock.user.id.split(':')[0];
@@ -702,7 +713,7 @@ async function connectWhatsApp(): Promise<void> {
           logger.debug({ lidUser, phoneUser }, 'LID to phone mapping set');
         }
       }
-      
+
       // Sync group metadata on startup (respects 24h cache)
       syncGroupMetadata().catch((err) =>
         logger.error({ err }, 'Initial group sync failed'),
@@ -736,7 +747,7 @@ async function connectWhatsApp(): Promise<void> {
 
       // Translate LID JID to phone JID if applicable
       const chatJid = translateJid(rawJid);
-      
+
       const timestamp = new Date(
         Number(msg.messageTimestamp) * 1000,
       ).toISOString();
@@ -834,12 +845,126 @@ function ensureContainerSystemRunning(): void {
   }
 }
 
+async function runEmailAgent(
+  group: RegisteredGroup,
+  prompt: string,
+  chatJid: string,
+): Promise<string | null> {
+  const sessionId = sessions[group.folder];
+
+  try {
+    const output = await runContainerAgent(group, {
+      prompt,
+      sessionId,
+      groupFolder: group.folder,
+      chatJid,
+      isMain: false,
+    });
+
+    if (output.newSessionId) {
+      sessions[group.folder] = output.newSessionId;
+      saveJson(path.join(DATA_DIR, 'sessions.json'), sessions);
+    }
+
+    if (output.status === 'error') {
+      logger.error({ group: group.name, error: output.error }, 'Email agent error');
+      return null;
+    }
+
+    return output.result;
+  } catch (err) {
+    logger.error({ group: group.name, err }, 'Email agent error');
+    return null;
+  }
+}
+
+async function startEmailLoop(): Promise<void> {
+  if (!EMAIL_CHANNEL.enabled) {
+    logger.info('Email channel disabled');
+    return;
+  }
+
+  logger.info(
+    { triggerMode: EMAIL_CHANNEL.triggerMode, triggerValue: EMAIL_CHANNEL.triggerValue },
+    'Email channel running',
+  );
+
+  while (true) {
+    try {
+      const emails = await checkForNewEmails();
+
+      for (const email of emails) {
+        if (isEmailProcessed(email.id)) continue;
+
+        logger.info({ from: email.from, subject: email.subject }, 'Processing email');
+        markEmailProcessed(email.id, email.threadId, email.from, email.subject);
+
+        const contextKey = getContextKey(email);
+        const groupFolder = contextKey;
+
+        // Ensure group folder exists
+        const groupDir = path.join(GROUPS_DIR, groupFolder);
+        fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
+
+        // Create CLAUDE.md if missing
+        const claudeMdPath = path.join(groupDir, 'CLAUDE.md');
+        if (!fs.existsSync(claudeMdPath)) {
+          const senderAddr = email.from.match(/<(.+?)>/)?.[1] || email.from;
+          fs.writeFileSync(
+            claudeMdPath,
+            `# Email conversation with ${senderAddr}\n\nYou are responding to emails from ${senderAddr}. Your responses will be sent as email replies.\n\n## Guidelines\n\n- Be professional and clear\n- Keep responses concise but complete\n- Use proper email formatting\n- If the email requires action you cannot take, explain what the user should do\n`,
+          );
+        }
+
+        // Register the email group in-memory (not persisted — recreated on each email)
+        const emailGroup: RegisteredGroup = {
+          name: `Email: ${email.from}`,
+          folder: groupFolder,
+          trigger: '',
+          added_at: new Date().toISOString(),
+        };
+
+        const escapeXml = (s: string) =>
+          s
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+
+        const prompt =
+          `<email>\n` +
+          `<from>${escapeXml(email.from)}</from>\n` +
+          `<subject>${escapeXml(email.subject)}</subject>\n` +
+          `<body>${escapeXml(email.body)}</body>\n` +
+          `</email>\n\n` +
+          `Respond to this email. Your response will be sent as an email reply.`;
+
+        const response = await runEmailAgent(emailGroup, prompt, `email:${email.from}`);
+
+        if (response) {
+          await sendEmailReply(email.from, email.subject, response, email.threadId, email.id);
+          markEmailResponded(email.id);
+        }
+      }
+    } catch (err) {
+      logger.error({ err }, 'Error in email loop');
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, EMAIL_CHANNEL.pollIntervalMs));
+  }
+}
+
 async function main(): Promise<void> {
   ensureContainerSystemRunning();
   initDatabase();
   logger.info('Database initialized');
   loadState();
   await connectWhatsApp();
+
+  // Start email polling loop (fire-and-forget)
+  startEmailLoop().catch((err) =>
+    logger.error({ err }, 'Email loop crashed'),
+  );
 }
 
 main().catch((err) => {
