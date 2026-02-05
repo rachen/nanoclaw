@@ -140,6 +140,13 @@ async function syncGroupMetadata(force = false): Promise<void> {
     }
   }
 
+async function sendDiscordDM(userId: string, text: string): Promise<void> {
+  const discord = await getDiscordClient();
+  const user = await discord.users.fetch(userId);
+  await user.send(text);
+  logger.info({ userId, length: text.length }, 'Discord DM sent');
+}
+
   try {
     logger.info('Syncing group metadata from WhatsApp...');
     const groups = await sock.groupFetchAllParticipating();

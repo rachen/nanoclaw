@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install)",
+      "Bash(docker info:*)",
+      "Bash(node:*)",
+      "Bash([ -s \"$HOME/.nvm/nvm.sh\" ])",
+      "Bash(brew list:*)",
+      "Bash(/opt/homebrew/opt/node@22/bin/npm install)",
+      "Bash(container system start:*)",
+      "Bash(container:*)",
+      "Bash(./container/build.sh:*)",
+      "Bash(export PATH=\"/opt/homebrew/Cellar/node@22/22.22.0/bin:$PATH\":*)",
+      "Bash(npm run build:*)",
+      "Bash(launchctl list:*)",
+      "Bash(pgrep:*)",
+      "Bash(launchctl unload:*)",
+      "Bash(launchctl load:*)",
+      "Bash(./build.sh:*)",
+      "Bash(test:*)",
+      "Bash(npm ls:*)",
+      "Bash(mdfind:*)",
+      "Bash(npx dotenv:*)",
+      "Bash(tree:*)",
+      "Bash(op:*)",
+      "Bash(op account list:*)",
+      "Bash(python3:*)",
+      "WebSearch",
+      "Bash(npm info:*)",
+      "Bash(PATH=/opt/homebrew/Cellar/node@22/22.22.0/bin:$PATH node -e \"const {version} = require\\(''discord.js''\\); console.log\\(version\\)\")",
+      "Bash(sqlite3:*)",
+      "Bash(ls:*)",
+      "Bash(git fetch:*)",
+      "Bash(gh pr view:*)",
+      "Bash(git checkout:*)",
+      "Bash(git cherry-pick:*)",
+      "Bash(npm install:*)",
+      "Bash(npm start)",
+      "Bash(grep:*)",
+      "Bash(/Users/raymondchen/nanoclaw/container/build.sh:*)"
+    ]
+  }
+}
