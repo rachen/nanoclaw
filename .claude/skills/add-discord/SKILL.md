@@ -167,8 +167,31 @@ launchctl kickstart -k gui/$(id -u)/com.nanoclaw
 ```
 .claude/skills/add-discord/
 ├── SKILL.md          # This documentation
-├── host.ts           # Host-side IPC handler (uses discord.js)
-└── agent.ts          # Container-side MCP tool definitions
+├── host.ts           # Host-side IPC handler (imports script functions)
+├── agent.ts          # Container-side MCP tool definitions
+├── lib/              # Shared helpers
+│   ├── discord-client.ts  # Discord client singleton
+│   ├── discord.ts         # Discord helper functions
+│   ├── logger.ts          # Pino logger
+│   └── types.ts           # Shared types
+└── scripts/          # Discord action modules (imported by host.ts)
+    ├── send.ts
+    ├── reply.ts
+    ├── react.ts
+    ├── edit.ts
+    ├── delete.ts
+    ├── pin.ts
+    ├── unpin.ts
+    ├── get_messages.ts
+    ├── create_thread.ts
+    ├── list_channels.ts
+    ├── get_channel_info.ts
+    ├── get_user.ts
+    ├── list_members.ts
+    ├── dm.ts
+    ├── list_guilds.ts
+    ├── get_guild_info.ts
+    └── webhook_send.ts
 ```
 
 ## Quick Start (Action-Only Mode)
