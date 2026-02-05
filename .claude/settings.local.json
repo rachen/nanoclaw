@@ -37,7 +37,8 @@
       "Bash(npm install:*)",
       "Bash(npm start)",
       "Bash(grep:*)",
-      "Bash(/Users/raymondchen/nanoclaw/container/build.sh:*)"
+      "Bash(/Users/raymondchen/nanoclaw/container/build.sh:*)",
+      "Bash(git add:*)"
     ]
   }
 }
