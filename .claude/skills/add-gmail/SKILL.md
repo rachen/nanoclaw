@@ -388,85 +388,47 @@ Also find the `initDatabase()` function in `src/db.ts` and add a call to `initEm
 
 ### Step 4: Create Email Channel Module
 
-Create a new file `src/email-channel.ts` with this content:
+Copy the complete implementation from the skill directory:
 
-```typescript
-import { EMAIL_CHANNEL } from './config.js';
-import { isEmailProcessed, markEmailProcessed, markEmailResponded } from './db.js';
-import pino from 'pino';
-
-const logger = pino({
-  level: process.env.LOG_LEVEL || 'info',
-  transport: { target: 'pino-pretty', options: { colorize: true } }
-});
-
-interface EmailMessage {
-  id: string;
-  threadId: string;
-  from: string;
-  subject: string;
-  body: string;
-  date: string;
-}
-
-// Gmail MCP client functions (call via subprocess or import the MCP directly)
-// These would invoke the Gmail MCP tools
-
-export async function checkForNewEmails(): Promise<EmailMessage[]> {
-  // Build query based on trigger mode
-  let query: string;
-  switch (EMAIL_CHANNEL.triggerMode) {
-    case 'label':
-      query = `label:${EMAIL_CHANNEL.triggerValue} is:unread`;
-      break;
-    case 'address':
-      query = `to:${EMAIL_CHANNEL.triggerValue} is:unread`;
-      break;
-    case 'subject':
-      query = `subject:${EMAIL_CHANNEL.triggerValue} is:unread`;
-      break;
-  }
-
-  // This requires calling Gmail MCP's search_emails tool
-  // Implementation depends on how you want to invoke MCP from Node
-  // Option 1: Use @anthropic-ai/claude-agent-sdk with just gmail MCP
-  // Option 2: Run npx gmail MCP as subprocess and parse output
-  // Option 3: Import gmail-autoauth-mcp directly
-
-  // Placeholder - implement based on preference
-  return [];
-}
-
-export async function sendEmailReply(
-  threadId: string,
-  to: string,
-  subject: string,
-  body: string
-): Promise<void> {
-  // Call Gmail MCP's send_email tool with in_reply_to for threading
-  // Prefix subject with replyPrefix if configured
-  const replySubject = subject.startsWith('Re:')
-    ? subject
-    : `Re: ${subject}`;
-
-  const prefixedBody = EMAIL_CHANNEL.replyPrefix
-    ? `${EMAIL_CHANNEL.replyPrefix}${body}`
-    : body;
-
-  // Implementation: invoke Gmail MCP send_email
-}
-
-export function getContextKey(email: EmailMessage): string {
-  switch (EMAIL_CHANNEL.contextMode) {
-    case 'thread':
-      return `email-thread-${email.threadId}`;
-    case 'sender':
-      return `email-sender-${email.from.toLowerCase()}`;
-    case 'single':
-      return 'email-main';
-  }
-}
+```bash
+cp .claude/skills/add-gmail/email-channel.ts src/email-channel.ts
 ```
+
+This file provides a complete Gmail MCP client implementation with:
+
+**Key Features:**
+- **One-shot MCP subprocess pattern** - Spawns fresh process for each call (required for launchd reliability)
+- **Non-standard MCP protocol** - Uses `arguments` parameter instead of standard `input` (specific to this MCP package)
+- **Email polling** - Checks for new emails based on configured trigger (label/address/subject)
+- **Thread-aware replies** - Sends replies with proper threading
+- **Context key generation** - Routes emails to appropriate agent context
+
+**Implementation Details:**
+
+The module uses `child_process.spawn()` to invoke the Gmail MCP server:
+1. Spawns `node` directly with absolute path (not `npx` - avoid exec issues under launchd)
+2. Writes all MCP messages at once: `initialize` → `initialized` → `tools/call`
+3. Closes stdin immediately to trigger server processing
+4. Parses response from stdout on process close
+5. 20-second timeout for safety
+
+**MCP Protocol:**
+```typescript
+const messages = [
+  { jsonrpc: '2.0', id: 1, method: 'initialize', params: {...} },
+  { jsonrpc: '2.0', method: 'initialized', params: {} },
+  { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: toolName, arguments: args } }
+];
+```
+
+**Critical:** Uses `arguments` not `input` in tools/call (non-standard for this MCP package).
+
+**Exported Functions:**
+- `checkForNewEmails()` - Polls Gmail via search_emails and read_email tools
+- `sendEmailReply()` - Sends reply via send_email tool with threading support
+- `getContextKey()` - Derives group folder key from email based on context mode
+
+See `.claude/skills/add-gmail/email-channel.ts` for full implementation (273 lines).
 
 ### Step 5: Add Email Polling to Main Loop
 
@@ -669,6 +631,88 @@ Monitor for the test:
 ```bash
 tail -f logs/nanoclaw.log | grep -E "(email|Email)"
 ```
+
+---
+
+## Implementation Notes
+
+### MCP Protocol Quirks
+
+This Gmail MCP package (`@gongrzhe/server-gmail-autoauth-mcp`) has non-standard behavior:
+
+**1. Uses `arguments` not `input`:**
+```typescript
+// Standard MCP:
+{ method: 'tools/call', params: { name: 'search_emails', input: { query: '...' } } }
+
+// This Gmail MCP:
+{ method: 'tools/call', params: { name: 'search_emails', arguments: { query: '...' } } }
+```
+
+If you use `input`, you'll get a Zod error: "expected object, received undefined".
+
+**2. Requires full handshake:**
+You cannot send just a `tools/call` request. The MCP server requires:
+1. `initialize` (with id)
+2. `initialized` (notification, no id)
+3. `tools/call` (with id)
+
+**3. Plain-text responses:**
+Unlike typical MCP servers that return structured JSON, this one returns formatted text:
+```
+ID: 19c2870331345630
+Subject: Test email
+From: user@example.com
+Date: 2026-02-04
+```
+
+The `email-channel.ts` includes parsers for these formats.
+
+### Why One-Shot Spawn Pattern?
+
+Our implementation spawns a fresh MCP process for each Gmail operation instead of keeping a long-lived connection. Why?
+
+**Problem with keep-alive under launchd:**
+- Works perfectly in interactive terminal testing
+- Hangs silently under macOS launchd on the second MCP call
+- No timeout fires, no error logs, just silent hang
+- Likely related to stdio pipe handling in launchd environment
+
+**Solution:**
+Each `gmailMcpCall()`:
+1. Spawns fresh node process
+2. Writes all messages (init + initialized + tools/call)
+3. Closes stdin immediately
+4. Waits for process close event
+5. Parses response from stdout
+
+This adds ~500ms latency per call but is 100% reliable under launchd.
+
+### Email Retry Logic
+
+The database field `response_sent` enables automatic retry:
+
+```typescript
+export function isEmailProcessed(messageId: string): boolean {
+  // Only consider fully processed (response_sent = 1)
+  const row = db.prepare(
+    'SELECT 1 FROM processed_emails WHERE message_id = ? AND response_sent = 1'
+  ).get(messageId);
+  return !!row;
+}
+```
+
+**Flow:**
+1. Email detected → `markEmailProcessed()` (sets `response_sent = 0`)
+2. Agent processes → sends reply → `markEmailResponded()` (sets `response_sent = 1`)
+
+**If step 2 fails** (agent error, network issue, etc.), the email remains with `response_sent = 0` and will be retried on the next poll.
+
+### OAuth Token Management
+
+The Gmail MCP automatically refreshes expired access tokens using the refresh token stored in `~/.gmail-mcp/credentials.json`. No manual intervention needed.
+
+Token refresh happens transparently during MCP calls when the access token has expired.
 
 ---
 
