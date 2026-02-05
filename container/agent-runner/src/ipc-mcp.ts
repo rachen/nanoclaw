@@ -279,6 +279,75 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
       ),
 
       tool(
+        'send_typing_indicator',
+        'Show a "typing..." indicator in the current chat. Useful before a long operation so the user knows the agent is working.',
+        {
+          duration: z.number().optional().describe('How long to show typing in milliseconds (default: 5000, max: 15000)')
+        },
+        async (args) => {
+          const duration = Math.min(args.duration || 5000, 15000);
+
+          const data = {
+            type: 'typing_indicator',
+            chatJid,
+            groupFolder,
+            duration,
+            timestamp: new Date().toISOString()
+          };
+
+          const filename = writeIpcFile(MESSAGES_DIR, data);
+
+          return {
+            content: [{
+              type: 'text',
+              text: `Typing indicator sent (${duration}ms)`
+            }]
+          };
+        }
+      ),
+
+      tool(
+        'discord_dm',
+        'Send a direct message to a Discord user by their user ID. Main group only.',
+        {
+          user_id: z.string().describe('Discord user ID (snowflake, e.g., "93979054763413504")'),
+          text: z.string().describe('Message content (max 2000 characters)')
+        },
+        async (args) => {
+          if (!isMain) {
+            return {
+              content: [{ type: 'text', text: 'Only the main group can send Discord DMs.' }],
+              isError: true
+            };
+          }
+
+          if (args.text.length > 2000) {
+            return {
+              content: [{ type: 'text', text: `Message exceeds Discord 2000 character limit (current: ${args.text.length})` }],
+              isError: true
+            };
+          }
+
+          const data = {
+            type: 'discord_dm',
+            userId: args.user_id,
+            text: args.text,
+            groupFolder,
+            timestamp: new Date().toISOString()
+          };
+
+          const filename = writeIpcFile(TASKS_DIR, data);
+
+          return {
+            content: [{
+              type: 'text',
+              text: `Discord DM queued for user ${args.user_id}`
+            }]
+          };
+        }
+      ),
+
+      tool(
         'register_group',
         `Register a new WhatsApp group so the agent can respond to messages there. Main group only.
 
@@ -315,7 +384,72 @@ Use available_groups.json to find the JID for a group. The folder name should be
             }]
           };
         }
+      ),
+
+      tool(
+        'discord_dm',
+        'Send a direct message to a Discord user by ID. Main group only.',
+        {
+          user_id: z.string().describe('Discord user ID (snowflake)'),
+          text: z.string().describe('Message content')
+        },
+        async (args) => {
+          if (!isMain) {
+            return {
+              content: [{ type: 'text', text: 'Only the main group can send Discord DMs.' }],
+              isError: true
+            };
+          }
+
+          const data = {
+            type: 'discord_dm',
+            userId: args.user_id,
+            text: args.text,
+            groupFolder,
+            timestamp: new Date().toISOString()
+          };
+
+          writeIpcFile(TASKS_DIR, data);
+
+          return {
+            content: [{
+              type: 'text',
+              text: `Discord DM queued for user ${args.user_id}`
+            }]
+          };
+        },
+
+      tool(
+        'discord_dm',
+        'Send a direct message to a Discord user by ID. Main group only.',
+        {
+          user_id: z.string().describe('Discord user ID (snowflake)'),
+          text: z.string().describe('Message content')
+        },
+        async (args) => {
+          if (!isMain) {
+            return {
+              content: [{ type: 'text', text: 'Only the main group can send Discord DMs.' }],
+              isError: true
+            };
+          }
+
+          const data = {
+            type: 'discord_dm',
+            userId: args.user_id,
+            text: args.text,
+            groupFolder,
+            timestamp: new Date().toISOString()
+          };
+
+          writeIpcFile(TASKS_DIR, data);
+
+          return {
+            content: [{
+              type: 'text',
+              text: `Discord DM queued for user ${args.user_id}`
+            }]
+          };
+        }
       )
-    ]
-  });
 }
