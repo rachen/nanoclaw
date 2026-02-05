@@ -298,8 +298,10 @@ async function processMessage(msg: NewMessage): Promise<void> {
   const content = msg.content.trim();
   const isMainGroup = group.folder === MAIN_GROUP_FOLDER;
 
-  // Main group responds to all messages; other groups require trigger prefix
-  if (!isMainGroup && !TRIGGER_PATTERN.test(content)) return;
+  // Check if trigger is required (empty trigger = auto-respond)
+  if (group.trigger && !content.match(new RegExp(`^${group.trigger}\\b`, 'i'))) {
+    return; // Message doesn't match required trigger
+  }
 
   // Get all messages since last agent interaction so the session has full context
   const sinceTimestamp = lastAgentTimestamp[msg.chat_jid] || '';
@@ -1083,6 +1085,12 @@ async function startDiscordBot(): Promise<void> {
       'Discord message received',
     );
 
+    // Check if trigger is required (empty trigger = auto-respond)
+    const content = message.content || '';
+    if (group.trigger && !content.match(new RegExp(`^${group.trigger}\\b`, 'i'))) {
+      return; // Message doesn't match required trigger
+    }
+
     const escapeXml = (s: string) =>
       s
         .replace(/&/g, '&amp;')
@@ -1093,7 +1101,7 @@ async function startDiscordBot(): Promise<void> {
     const prompt =
       `<messages>\n` +
       `<message sender="${escapeXml(message.author.username)}" time="${timestamp}">` +
-      `${escapeXml(message.content || '')}</message>\n` +
+      `${escapeXml(content)}</message>\n` +
       `</messages>`;
 
     try {
