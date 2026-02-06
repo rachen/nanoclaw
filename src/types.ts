@@ -78,6 +78,18 @@ export interface TaskRunLog {
   error: string | null;
 }
 
+export interface HostModificationRequest {
+  id: string;
+  groupFolder: string;
+  chatJid: string;
+  summary: string;
+  filePath: string;
+  timestamp: string;
+  status: 'pending' | 'approved' | 'denied' | 'applied' | 'failed';
+  approvedBy?: string;
+  error?: string;
+}
+
 export interface EmailChannelConfig {
   enabled: boolean;
   triggerMode: 'label' | 'address' | 'subject';

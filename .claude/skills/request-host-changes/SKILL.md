@@ -81,7 +81,13 @@ Use this when you want containers to be able to:
 3. User applies with: `claude "Apply changes in groups/{group}/PENDING_HOST_CHANGES.md"`
 4. Claude Code on host executes the plan
 
-**No polling or automation** - user explicitly reviews and approves changes.
+**Automated scanning + approval workflow:**
+1. Container writes `groups/{group}/PENDING_HOST_CHANGES.md`
+2. Host scanner detects the file within 60 seconds
+3. Approval request sent via Discord buttons or WhatsApp text
+4. User approves or denies
+5. On approval: Claude CLI applies the plan automatically
+6. File archived as `HOST_CHANGES_APPLIED_*.md` or `HOST_CHANGES_DENIED_*.md`
 
 ## Installation
 
@@ -238,54 +244,45 @@ See `groups/discord-dm-93979054763413504/PENDING_HOST_CHANGES.md` for the TikTok
 - Clear handoff documentation
 
 **Simplicity:**
-- File-based, no new IPC mechanisms
-- Uses existing Claude Code on host
-- No polling or background services
+- File-based trigger, integrates with existing scheduler
+- Discord buttons for one-click approval
+- WhatsApp text-based approval as fallback
 
-## Limitations
+## Automated Scanner
 
-1. **Manual workflow** - User must run Claude Code manually
-2. **Not real-time** - Container can't know when changes are applied
-3. **Single direction** - No feedback loop from host to container
-4. **Documentation only** - If container generates wrong paths, user must fix
+The host runs a scanner every 60 seconds (in the scheduler loop) that:
+1. Scans `groups/*/PENDING_HOST_CHANGES.md` for new files
+2. Parses the `## Summary` section
+3. Sends approval request to the group's chat (Discord buttons or WhatsApp text)
+4. Renames file to `.notified.md` to avoid re-notifying
 
-## Future Enhancements (Not in This Skill)
+**Approval flow:**
+- **Discord:** Click Approve/Deny buttons on the message
+- **WhatsApp:** Reply `approve hc-{id}` or `deny hc-{id}`
 
-If you want automation, consider adding:
-- IPC tool `request_host_modification` that creates tickets
-- Host-side polling loop that executes approved requests
-- Discord notification when host applies changes
-- Approval workflow (DM user for confirmation)
+**On approval:** Runs `claude --print` to apply the plan, archives to `HOST_CHANGES_APPLIED_*.md`
+**On denial:** Archives to `HOST_CHANGES_DENIED_*.md`
 
-These would be separate skills that build on this pattern.
+## Implementation Files
+
+| File | Purpose |
+|------|---------|
+| `src/host-changes-scanner.ts` | Scan logic, approval handling, Discord button handler |
+| `src/types.ts` | `HostModificationRequest` interface |
+| `src/task-scheduler.ts` | Calls `scanForHostChanges` each cycle |
+| `src/index.ts` | Wires approval interception + Discord interaction handler |
 
 ## Testing
 
-After installing this skill:
-
-1. Send a message to main group: `@bot Design a feature that requires host changes`
-2. Container should write `groups/main/PENDING_HOST_CHANGES.md`
-3. Review the file
-4. Apply with: `claude "Apply changes in groups/main/PENDING_HOST_CHANGES.md"`
-5. Verify changes were applied correctly
-
-## Contributing
-
-If you improve this pattern:
-- Update the template format
-- Add real-world examples
-- Document gotchas and best practices
-- Consider PR to main NanoClaw repo
-
-## Files Modified
-
-- `groups/main/CLAUDE.md` - Added "Requesting Host Modifications" section
-- `groups/main/PENDING_HOST_CHANGES.example.md` - Created example template
-- Optional: Update other group CLAUDE.md files
+1. Create `groups/main/PENDING_HOST_CHANGES.md` with a `## Summary` section
+2. Start or restart the service
+3. Wait up to 60s for scanner to detect the file
+4. Approve via Discord button or WhatsApp text reply
+5. Verify Claude CLI runs and file is archived
 
 ## Cost
 
-$0 - Pure documentation, no API calls
+Scanning is free. Applying approved changes costs one Claude API call per approval.
 
 ## License
 

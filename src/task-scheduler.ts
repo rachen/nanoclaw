@@ -2,6 +2,8 @@ import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 import path from 'path';
 
+import { Client } from 'discord.js';
+
 import {
   DATA_DIR,
   GROUPS_DIR,
@@ -17,6 +19,7 @@ import {
   logTaskRun,
   updateTaskAfterRun,
 } from './db.js';
+import { scanForHostChanges } from './host-changes-scanner.js';
 import { logger } from './logger.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
 
@@ -24,6 +27,7 @@ export interface SchedulerDependencies {
   sendMessage: (jid: string, text: string) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   getSessions: () => Record<string, string>;
+  discordClient: () => Client | null;
 }
 
 async function runTask(
@@ -167,6 +171,13 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
 
         await runTask(currentTask, deps);
       }
+
+      // Scan for pending host changes requests
+      await scanForHostChanges({
+        sendMessage: deps.sendMessage,
+        registeredGroups: deps.registeredGroups,
+        discordClient: deps.discordClient,
+      });
     } catch (err) {
       logger.error({ err }, 'Error in scheduler loop');
     }

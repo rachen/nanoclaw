@@ -50,6 +50,11 @@ import {
   storeMessage,
   updateChatName,
 } from './db.js';
+import {
+  checkApprovalMessage,
+  handleApproval,
+  handleDiscordButtonInteraction,
+} from './host-changes-scanner.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { NewMessage, RegisteredGroup, Session } from './types.js';
 import { loadJson, saveJson } from './utils.js';
@@ -133,10 +138,43 @@ async function resolveDiscordChannel(id: string): Promise<DiscordSendableChannel
   return (await user.createDM()) as DiscordSendableChannel;
 }
 
+const DISCORD_MAX_LENGTH = 1900;
+
+function splitDiscordMessage(text: string): string[] {
+  if (text.length <= DISCORD_MAX_LENGTH) return [text];
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > 0) {
+    if (remaining.length <= DISCORD_MAX_LENGTH) {
+      chunks.push(remaining);
+      break;
+    }
+    // Find a newline to split on within the limit
+    let splitAt = remaining.lastIndexOf('\n', DISCORD_MAX_LENGTH);
+    if (splitAt <= 0) {
+      // No newline found; split at a space
+      splitAt = remaining.lastIndexOf(' ', DISCORD_MAX_LENGTH);
+    }
+    if (splitAt <= 0) {
+      // No space either; hard split
+      splitAt = DISCORD_MAX_LENGTH;
+    }
+    chunks.push(remaining.slice(0, splitAt));
+    remaining = remaining.slice(splitAt).replace(/^\n/, '');
+  }
+  return chunks;
+}
+
+async function sendDiscordChunked(channel: DiscordSendableChannel, text: string): Promise<void> {
+  for (const chunk of splitDiscordMessage(text)) {
+    await channel.send(chunk);
+  }
+}
+
 async function sendDiscordMessage(channelOrUserId: string, text: string): Promise<void> {
   try {
     const channel = await resolveDiscordChannel(channelOrUserId);
-    await channel.send(text);
+    await sendDiscordChunked(channel, text);
     logger.info({ target: channelOrUserId, length: text.length }, 'Discord message sent');
   } catch (err) {
     logger.error({ target: channelOrUserId, err }, 'Failed to send Discord message');
@@ -297,6 +335,18 @@ async function processMessage(msg: NewMessage): Promise<void> {
 
   const content = msg.content.trim();
   const isMainGroup = group.folder === MAIN_GROUP_FOLDER;
+
+  // Check for host changes approval messages before trigger check
+  const approval = checkApprovalMessage(content, msg.chat_jid);
+  if (approval.isApproval) {
+    await handleApproval(
+      approval.requestId,
+      approval.approved,
+      msg.sender_name,
+      sendMessage,
+    );
+    return;
+  }
 
   // Check if trigger is required (empty trigger = auto-respond)
   if (group.trigger && !content.match(new RegExp(`^${group.trigger}\\b`, 'i'))) {
@@ -788,7 +838,7 @@ async function processTaskIpc(
       if (data.userId && data.text) {
         try {
           const channel = await resolveDiscordChannel(data.userId as string);
-          await channel.send(data.text as string);
+          await sendDiscordChunked(channel, data.text as string);
           logger.info(
             { userId: data.userId, sourceGroup },
             'Discord DM sent via IPC',
@@ -880,6 +930,7 @@ async function connectWhatsApp(): Promise<void> {
         sendMessage,
         registeredGroups: () => registeredGroups,
         getSessions: () => sessions,
+        discordClient: () => discordClient,
       });
       startIpcWatcher();
       startMessageLoop();
@@ -1027,6 +1078,14 @@ async function startDiscordBot(): Promise<void> {
   discord.on(Events.ChannelCreate, (channel: any) => {
     if (channel.isDMBased?.()) {
       logger.info({ channelId: channel.id }, 'New DM channel created');
+    }
+  });
+
+  discord.on(Events.InteractionCreate, async (interaction) => {
+    if (!interaction.isButton()) return;
+    const customId = interaction.customId;
+    if (customId.startsWith('hc_approve_') || customId.startsWith('hc_deny_')) {
+      await handleDiscordButtonInteraction(interaction, sendMessage);
     }
   });
 
