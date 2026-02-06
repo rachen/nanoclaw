@@ -63,6 +63,53 @@ Key paths inside the container:
 
 ---
 
+## Requesting Host Modifications
+
+When you need to modify the **host system** (not just files in the project), write a detailed plan to `PENDING_HOST_CHANGES.md` in this folder.
+
+**Use this for:**
+- Modifying TypeScript source code in `src/*.ts`
+- Installing npm packages
+- Updating `package.json` or `tsconfig.json`
+- Changing container configuration
+- Rebuilding container images
+- Restarting the launchd service
+
+**Template:**
+
+```markdown
+# Host Modification Request
+
+## Summary
+[One sentence: what needs to be done and why]
+
+## Context
+[Why this change is needed, what problem it solves]
+
+## Changes Required
+
+### 1. [Change Type - e.g., "Add new IPC handler"]
+**Files affected:** `src/index.ts`, `src/types.ts`
+
+**What to do:**
+[Detailed instructions with code snippets if applicable]
+
+### 2. [Next change...]
+...
+
+## Testing
+[How to verify the changes work]
+
+## Rollback
+[How to undo if something goes wrong]
+```
+
+After writing the plan, tell the user: "I've written a host modification request to `PENDING_HOST_CHANGES.md`. Please review and apply it by running: `claude \"Apply changes in groups/main/PENDING_HOST_CHANGES.md\"`"
+
+**Important:** You can read/write files in `/workspace/project/` but those changes happen in the container. The host process won't see them until restarted. For code changes, always use this handoff pattern.
+
+---
+
 ## Managing Groups
 
 ### Finding Available Groups
